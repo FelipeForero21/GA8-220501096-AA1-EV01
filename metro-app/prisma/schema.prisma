@@ -1,0 +1,231 @@
+// ============================================================
+// Schema de Prisma - Metro de Medellín
+// Define los modelos de datos para la aplicación
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---- Modelo de Usuario ----
+// Representa a los usuarios registrados en la plataforma
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  hashedPassword String   @map("hashed_password")
+  role           Role     @default(USER)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relaciones
+  cards          Card[]
+  sessions       Session[]
+  accounts       Account[]
+
+  @@map("users")
+}
+
+// ---- Modelo de Cuenta (para NextAuth) ----
+// Gestiona proveedores de autenticación OAuth
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+// ---- Modelo de Sesión (para NextAuth) ----
+// Almacena las sesiones activas de los usuarios
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ---- Modelo de Tarjeta Cívica ----
+// Representa la tarjeta de transporte del usuario
+model Card {
+  id        String     @id @default(cuid())
+  cardNumber String    @unique @map("card_number")
+  balance   Decimal    @default(0) @db.Decimal(10, 2)
+  status    CardStatus @default(ACTIVE)
+  userId    String     @map("user_id")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  // Relaciones
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trips Trip[]
+
+  @@map("cards")
+}
+
+// ---- Modelo de Viaje ----
+// Registra cada viaje realizado con una tarjeta
+model Trip {
+  id              String   @id @default(cuid())
+  cardId          String   @map("card_id")
+  originStationId String   @map("origin_station_id")
+  destStationId   String   @map("dest_station_id")
+  fare            Decimal  @db.Decimal(10, 2)
+  startTime       DateTime @map("start_time")
+  endTime         DateTime? @map("end_time")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relaciones
+  card          Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  originStation Station @relation("TripOrigin", fields: [originStationId], references: [id])
+  destStation   Station @relation("TripDest", fields: [destStationId], references: [id])
+
+  @@map("trips")
+}
+
+// ---- Modelo de Alerta ----
+// Notificaciones de retrasos, cierres y eventos del sistema
+model Alert {
+  id          String      @id @default(cuid())
+  title       String
+  description String      @db.Text
+  type        AlertType
+  severity    Severity    @default(INFO)
+  stationId   String?     @map("station_id")
+  lineId      String?     @map("line_id")
+  active      Boolean     @default(true)
+  startsAt    DateTime    @map("starts_at")
+  endsAt      DateTime?   @map("ends_at")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relaciones
+  station Station? @relation(fields: [stationId], references: [id])
+  line    Line?    @relation(fields: [lineId], references: [id])
+
+  @@map("alerts")
+}
+
+// ---- Modelo de Estación ----
+// Cada estación de la red del Metro de Medellín
+model Station {
+  id        String  @id @default(cuid())
+  name      String
+  code      String  @unique
+  lineId    String  @map("line_id")
+  order     Int     // Posición dentro de la línea
+  latitude  Decimal @db.Decimal(10, 7)
+  longitude Decimal @db.Decimal(10, 7)
+  isTransfer Boolean @default(false) @map("is_transfer")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relaciones
+  line            Line              @relation(fields: [lineId], references: [id])
+  alerts          Alert[]
+  tripsAsOrigin   Trip[]            @relation("TripOrigin")
+  tripsAsDest     Trip[]            @relation("TripDest")
+  connectionsFrom StationConnection[] @relation("ConnectionFrom")
+  connectionsTo   StationConnection[] @relation("ConnectionTo")
+
+  @@map("stations")
+}
+
+// ---- Modelo de Línea ----
+// Líneas del sistema metro (A, B, T-A, etc.)
+model Line {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  color     String   // Color hex para el mapa
+  type      LineType
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relaciones
+  stations Station[]
+  alerts   Alert[]
+
+  @@map("lines")
+}
+
+// ---- Modelo de Conexión entre Estaciones ----
+// Grafo de adyacencia para el algoritmo BFS de búsqueda de rutas
+model StationConnection {
+  id            String @id @default(cuid())
+  fromStationId String @map("from_station_id")
+  toStationId   String @map("to_station_id")
+  travelTime    Int    @map("travel_time") // Tiempo en minutos
+  distance      Decimal @db.Decimal(10, 2) // Distancia en km
+
+  // Relaciones
+  fromStation Station @relation("ConnectionFrom", fields: [fromStationId], references: [id])
+  toStation   Station @relation("ConnectionTo", fields: [toStationId], references: [id])
+
+  @@unique([fromStationId, toStationId])
+  @@map("station_connections")
+}
+
+// ---- Modelo de Suscripción Push ----
+// Almacena suscripciones para notificaciones Web Push
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("push_subscriptions")
+}
+
+// ---- Enums ----
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum CardStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum AlertType {
+  DELAY       // Retraso
+  CLOSURE     // Cierre de estación
+  MAINTENANCE // Mantenimiento programado
+  GENERAL     // Información general
+}
+
+enum Severity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum LineType {
+  METRO      // Línea de metro
+  TRAM       // Tranvía
+  CABLE      // Metrocable
+  BUS        // Bus alimentador
+}
